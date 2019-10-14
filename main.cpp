@@ -157,8 +157,19 @@ int main(int argc, char *argv[])
     // Start the actuall computation
     auto t1 = std::chrono::high_resolution_clock::now();
     std::vector <std::vector <float>> dimmatch_descriptor = computeLocalDepthFeature(cloud, evaluation_points, nearest_neighbors, cloud_lrf, radius, voxel_coordinates, num_voxels, smoothing_factor, save_file_name);
-    std::vector<std::vector<float>> features = getFeatures(dimmatch_descriptor, features_file_name);
+    TensorNet tfobj;
+    std::vector<std::string> input_nodes = {"X_reference", "keep_probability"};
+    std::vector<std::string> output_nodes = {"3DIM_cnn_1/copy"};
+    std::vector<int> input_dtype = {1, 0};
+    int nx,ny,nz;
+    nx = ny = nz = 16;
+    std::string path_to_graph = "graph.pb";
+    int output_feature_dimension = 32;
+    std::vector<std::vector<int>> node_size = {{nx, ny, nz,1},{1}};
+    tfobj.init_network(path_to_graph);
+    std::vector<std::vector<float>> features = tfobj.getFeatures(dimmatch_descriptor, features_file_name, input_nodes, output_nodes, input_dtype, node_size, output_feature_dimension, path_to_graph);
     auto t2 = std::chrono::high_resolution_clock::now();
+    tfobj.close_session();
     std::cout << "\n---------------------------------------------------------" << std::endl;
     std::cout << "LRF computation took "
               << std::chrono::duration_cast<std::chrono::milliseconds>(t2_lrf - t1_lrf).count()

@@ -1,14 +1,19 @@
 #include <tensorflow/core/public/session.h>
 #include <tensorflow/core/platform/env.h>
+#include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 #include "tensor_net.hpp"
 
 
 using namespace tensorflow;
+using namespace boost::program_options;
 using namespace std;
 
-void saveVectorFeatures(std::string filename, const std::vector<std::vector<float>> descriptor)
+Session* session;
+Status status = NewSession(SessionOptions(), &session);
+
+void TensorNet::saveVectorFeatures(std::string filename, const std::vector<std::vector<float>> descriptor)
 {
     std::cout << "Saving Features to a CSV file:" << std::endl;
     std::cout << filename << std::endl;
@@ -28,22 +33,18 @@ void saveVectorFeatures(std::string filename, const std::vector<std::vector<floa
     outFile.close();
 }
 
-std::vector<std::vector<float>>  getFeatures(std::vector <std::vector <float>> DIMATCH_Descriptor, std::string saveFileName) {
-  // Initialize a tensorflow session
-  Session* session;
-  Status status = NewSession(SessionOptions(), &session);
+void TensorNet::init_network(std::string path_to_graph)
+{
+  
+  
   if (!status.ok()) {
     std::cout << status.ToString() << "\n";
     //return 1;
   }
 
-  // Read in the protobuf graph we exported
-  // (The path seems to be relative to the cwd. Keep this in mind
-  // when using `bazel run` since the cwd isn't where you call
-  // `bazel run` but from inside a temp folder.)
-
+  // Read in the protobuf graph
   GraphDef graph_def;
-  status = ReadBinaryProto(Env::Default(), "graph.pb", &graph_def);
+  status = ReadBinaryProto(Env::Default(),path_to_graph, &graph_def);
   if (!status.ok()) {
     std::cout << status.ToString() << "\n";
   }
@@ -54,25 +55,32 @@ std::vector<std::vector<float>>  getFeatures(std::vector <std::vector <float>> D
     std::cout << status.ToString() << "\n";
   }
 
+}
+void TensorNet::close_session()
+{
+  session->Close();
+}
+std::vector<std::vector<float>>  TensorNet::getFeatures(std::vector<std::vector<float>> DIMATCH_Descriptor, 
+                                std::string saveFileName, 
+                                std::vector<std::string>input_nodes,
+                                std::vector<std::string>output_nodes,
+                                std::vector<int> input_dtype,
+                                std::vector<std::vector<int>> node_size,
+                                int output_feature_dimension, 
+                                std::string path_to_graph) 
+{
+
   // Setup inputs and outputs:
-
-  // Our graph doesn't require any inputs, since it specifies default values,
-  // but we'll change an input to demonstrate.
-
-  int nx,ny,nz;
-  nx = ny = nz = 16;
   auto descriptor_size = DIMATCH_Descriptor.size();
-  auto stride = nx * ny * nz;
-  int feature_dimension = 32;
-  vector<vector<float>> output_vector; //(descriptor_size, vector<float> (feature_dimension));
-  int output_vector_pointer = 0;
-  // output_vector.resize(descriptor_size);
+  vector<vector<float>> output_vector; 
   int batch_size = 1000;
-  // Convert vector of vectors to vector
+  
   int num_batches = int(descriptor_size/batch_size) + 1;
   int batch_itr = 0;
+
   for(int num=0; num<num_batches; num++)
   {
+    vector<Tensor> feed_dict;
     printf("Batch no.: %d\n", num);
     int current_batch_size = 0;
     vector<vector<float>> discriptor_batch;
@@ -98,63 +106,71 @@ std::vector<std::vector<float>>  getFeatures(std::vector <std::vector <float>> D
     for(auto && value : discriptor_batch){
       flat_discriptor.insert(flat_discriptor.end(), value.begin(), value.end());
     }  
-    Tensor X_reference(DT_FLOAT, TensorShape({current_batch_size,nx,ny,nz,1}));
-
-    auto dst = X_reference.flat<float>().data();
-    for (int i = 0; i < current_batch_size*nx*ny*nz; i++) {
-      dst[i] = flat_discriptor[i];
+    printf("Creating feed dict \n");
+    for(int i=0;i<input_dtype.size();i++)
+    {
+      if(input_dtype[i]==1)
+      {
+        printf("Data Type 1");
+        std::vector<long long int> current_node_dimension;
+        std::vector<int> node_dimension = node_size[i];
+        current_node_dimension.push_back(current_batch_size);
+        int num_elements_in_batch = current_batch_size;
+        for(int i=0; i< node_dimension.size();i++)
+        {
+          num_elements_in_batch *= node_dimension[i];
+          current_node_dimension.push_back(node_dimension[i]);
+        }
+        Tensor temp(DT_FLOAT, TensorShape(current_node_dimension));
+        auto dst = temp.flat<float>().data();
+        for (int i = 0; i < num_elements_in_batch; i++) {
+          dst[i] = flat_discriptor[i];
+        }
+        feed_dict.push_back(temp);
+      }
+      else if(input_dtype[i]==0)
+      {
+        printf("Data Type 0");
+        std::vector<int> node_dimension = node_size[i];
+        Tensor temp(DT_FLOAT, TensorShape());
+        temp.scalar<float>()() = float(node_dimension[0]);
+        feed_dict.push_back(temp);
+      }
     }
-    Tensor keep_probability(DT_FLOAT, TensorShape());
-    keep_probability.scalar<float>()() = 1.0;
-
-    std::vector<std::pair<std::string, tensorflow::Tensor>> inputs = {
-      { "X_reference", X_reference },
-      { "keep_probability", keep_probability }
-    };
-
+    printf("Feed dict created\n");
+    std::cout<<feed_dict.size();
+    std::vector<std::pair<std::string, tensorflow::Tensor>> inputs;
+    for(int i=0; i<input_dtype.size(); i++)
+    {
+      std::pair<std::string, tensorflow::Tensor> temp = {input_nodes[i], feed_dict[i]};
+      inputs.push_back(temp);
+    }
+    
+    printf("Inputs created \n");
+    std::cout<<inputs[0].first;
     // The session will initialize the outputs
     std::vector<tensorflow::Tensor> outputs;
 
     // Run the session, evaluating our "c" operation from the graph
-    status = session->Run(inputs, {"3DIM_cnn_1/copy"}, {}, &outputs);
+    status = session->Run(inputs, output_nodes, {}, &outputs);
     if (!status.ok()) {
       std::cout << status.ToString() << "\n";
     }
 
-
-
-
     // Grab the output from Tensor to make ti <vector<vector<float>>
     auto output_c = outputs[0].flat<float>().data();
-    /*
-    vector<float> temp;
-    bool flag = true;
-    for(int i=0; i< current_batch_size*feature_dimension; i++)
-    {
-      temp.push_back(output_c[i]);
-      if(i%feature_dimension-1==0 && !flag)
-      {
-        flag = false;
-        output_vector.push_back(temp);
-        vector<float> temp;
-      }
-    }
-    */
+
     auto idx = 0;
     for(auto row = 0;row < current_batch_size;row++){
       vector<float> tmp;
-      for(auto col = 0;col < feature_dimension;col++){
+      for(auto col = 0;col < output_feature_dimension;col++){
         tmp.push_back(output_c[idx]);
         idx++;
       }
       output_vector.push_back(tmp);
     }
-
-
   }
   printf("Feature Computation Done!\n");
-  // Free any resources used by the session
-  session->Close();
-  saveVector(saveFileName, output_vector);
+  saveVectorFeatures(saveFileName, output_vector);
   return output_vector;
 }
