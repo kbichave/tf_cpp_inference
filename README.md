@@ -6,6 +6,7 @@ Tu run demo:
 ```bash
 $ ./run_inference.sh
 ```
+The Python [code](https://github.com/path-robotics/tf_cpp_frozengraph_inference/blob/master/frozen_graoh/encrypt_decrypt.py) to encrypt and decrypt the frozen graph saved in .pb file is also provided. It depends on [pyAesCrypt](https://pypi.org/project/pyAesCrypt/).
 
 ## TensorNet Reference
 
